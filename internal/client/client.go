@@ -16,7 +16,18 @@ const (
 	defaultDialTimeout  = 2 * time.Second
 	defaultWriteTimeout = 2 * time.Second
 	defaultReadTimeout  = 2 * time.Second
+
+	// Script batches can contain thousands of commands and take longer to
+	// execute than a single command, so they get their own, larger defaults.
+	defaultScriptWriteTimeout = 30 * time.Second
+	defaultScriptReadTimeout  = 30 * time.Second
 )
+
+// halfCloser is implemented by connections (such as *net.UnixConn) that
+// support half-closing the write side to signal end-of-input.
+type halfCloser interface {
+	CloseWrite() error
+}
 
 // Error represents a structured client error with a code and message.
 type Error struct {
@@ -39,10 +50,12 @@ type Response struct {
 
 // Client sends protocol requests to the daemon socket.
 type Client struct {
-	socketPath   string
-	dialTimeout  time.Duration
-	readTimeout  time.Duration
-	writeTimeout time.Duration
+	socketPath         string
+	dialTimeout        time.Duration
+	readTimeout        time.Duration
+	writeTimeout       time.Duration
+	scriptReadTimeout  time.Duration
+	scriptWriteTimeout time.Duration
 }
 
 // Option configures the client.
@@ -54,10 +67,12 @@ func New(socketPath string, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("socket path must not be empty")
 	}
 	client := &Client{
-		socketPath:   socketPath,
-		dialTimeout:  defaultDialTimeout,
-		readTimeout:  defaultReadTimeout,
-		writeTimeout: defaultWriteTimeout,
+		socketPath:         socketPath,
+		dialTimeout:        defaultDialTimeout,
+		readTimeout:        defaultReadTimeout,
+		writeTimeout:       defaultWriteTimeout,
+		scriptReadTimeout:  defaultScriptReadTimeout,
+		scriptWriteTimeout: defaultScriptWriteTimeout,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -94,6 +109,24 @@ func WithWriteTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithScriptReadTimeout overrides the default read timeout used by SendScript.
+func WithScriptReadTimeout(timeout time.Duration) Option {
+	return func(c *Client) {
+		if timeout > 0 {
+			c.scriptReadTimeout = timeout
+		}
+	}
+}
+
+// WithScriptWriteTimeout overrides the default write timeout used by SendScript.
+func WithScriptWriteTimeout(timeout time.Duration) Option {
+	return func(c *Client) {
+		if timeout > 0 {
+			c.scriptWriteTimeout = timeout
+		}
+	}
+}
+
 // Send sends a single request line and returns the parsed response.
 func (c *Client) Send(request string) (Response, error) {
 	if c == nil {
@@ -119,6 +152,55 @@ func (c *Client) Send(request string) (Response, error) {
 	}
 
 	if err := conn.SetReadDeadline(time.Now().Add(c.readTimeout)); err != nil {
+		return Response{}, Error{Code: "connection_failed", Message: err.Error()}
+	}
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		if isTimeout(err) {
+			return Response{}, Error{Code: "timeout", Message: "timed out waiting for response"}
+		}
+		return Response{}, Error{Code: "io", Message: err.Error()}
+	}
+	line = strings.TrimRight(line, "\r\n")
+	return parseResponse(line)
+}
+
+// SendScript sends a batch of newline-separated protocol commands as a
+// single "script" request over one connection and returns the parsed
+// response. Commands execute sequentially on the daemon as one undoable
+// step; on failure the response identifies the offending line number.
+func (c *Client) SendScript(lines []string) (Response, error) {
+	if c == nil {
+		return Response{}, Error{Code: "invalid_client", Message: "client is nil"}
+	}
+
+	dialer := net.Dialer{Timeout: c.dialTimeout}
+	conn, err := dialer.Dial("unix", c.socketPath)
+	if err != nil {
+		return Response{}, classifyDialError(err)
+	}
+	defer conn.Close()
+
+	if err := conn.SetWriteDeadline(time.Now().Add(c.scriptWriteTimeout)); err != nil {
+		return Response{}, Error{Code: "connection_failed", Message: err.Error()}
+	}
+	var body strings.Builder
+	body.WriteString("script\n")
+	for _, line := range lines {
+		body.WriteString(strings.TrimRight(line, "\r\n"))
+		body.WriteByte('\n')
+	}
+	if _, err := io.WriteString(conn, body.String()); err != nil {
+		return Response{}, Error{Code: "io", Message: err.Error()}
+	}
+	if closer, ok := conn.(halfCloser); ok {
+		if err := closer.CloseWrite(); err != nil {
+			return Response{}, Error{Code: "io", Message: err.Error()}
+		}
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(c.scriptReadTimeout)); err != nil {
 		return Response{}, Error{Code: "connection_failed", Message: err.Error()}
 	}
 	reader := bufio.NewReader(conn)

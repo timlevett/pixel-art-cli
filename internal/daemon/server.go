@@ -15,6 +15,13 @@ type RequestHandler interface {
 	Handle(request protocol.Request) string
 }
 
+// ScriptHandler executes a batch of newline-separated protocol commands
+// received over a single connection. Handlers that implement this
+// interface can serve the "script" command; others report it unsupported.
+type ScriptHandler interface {
+	HandleScript(lines []string) string
+}
+
 // Server listens on a Unix socket and handles one request per connection.
 type Server struct {
 	listener net.Listener
@@ -67,8 +74,46 @@ func (s *Server) handleConn(conn net.Conn) {
 		writeResponse(conn, formatProtocolError(err))
 		return
 	}
+	if request.Command == "script" {
+		writeResponse(conn, s.handleScript(reader, request))
+		return
+	}
 	response := s.handler.Handle(request)
 	writeResponse(conn, response)
+}
+
+// handleScript reads the remaining newline-separated command lines from the
+// connection (until EOF, i.e. the client half-closes its write side) and
+// executes them as a single batch via the handler's ScriptHandler support.
+func (s *Server) handleScript(reader *bufio.Reader, request protocol.Request) string {
+	if len(request.Args) != 0 {
+		return protocol.FormatError("invalid_args", "script takes no arguments")
+	}
+	scriptHandler, ok := s.handler.(ScriptHandler)
+	if !ok {
+		return protocol.FormatError("invalid_command", "script is not supported")
+	}
+	lines, err := readScriptLines(reader)
+	if err != nil {
+		return protocol.FormatError("invalid_command", "unable to read script body")
+	}
+	return scriptHandler.HandleScript(lines)
+}
+
+func readScriptLines(reader *bufio.Reader) ([]string, error) {
+	var lines []string
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			lines = append(lines, strings.TrimRight(line, "\r\n"))
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return lines, nil
+			}
+			return nil, err
+		}
+	}
 }
 
 func writeResponse(conn net.Conn, response string) {
