@@ -129,6 +129,24 @@ pxcli layer select base
 pxcli export out.png                # out.png shows base + sprite composited
 ```
 
+Frames:
+
+- `pxcli frame add` — create a new blank frame (its own independent layer stack, starting with just `base`) and print its 0-based index. Frame `0` always exists and can't be re-added.
+- `pxcli frame list` — list frame indices in creation order (`0` first).
+- `pxcli frame select <index>` — set the active frame. Every drawing command, `layer *`, `get_pixel`, `inspect`, `undo`, `redo`, and `export` act on whichever frame is active; each frame has its own independent layer stack and undo/redo history.
+- `pxcli frame ghost <index> [opacity]` — dump a text grid (same format as `inspect`) of the active frame with another frame's flattened content ghosted underneath at reduced opacity (default `0.35`). Onion-skinning for frame-to-frame coherence, without diffing exports by hand. Read-only.
+- `pxcli export_sheet <filename.png> [--cols N]` — tile every frame's flattened content into a single sprite-sheet PNG, `N` frames per row (default: all frames in one row), wrapping to a new row every `N` frames and padding any incomplete final row with transparent pixels.
+
+Frames are non-destructive, same as layers: `export` only ever flattens the *active* frame; `export_sheet` tiles every frame's own flattened composite side by side without merging frames into each other. **The windowed renderer only ever displays frame `0`'s `base` layer** — other frames are headless-only until `export`/`export_sheet` (or selecting back to frame `0`) shows them.
+
+```bash
+pxcli frame add                      # -> ok 1
+pxcli frame select 1
+pxcli fill_rect 0 0 8 8 "#ff0000"    # drawn on frame 1
+pxcli frame ghost 0 0.5              # frame 1 on top, frame 0 dimmed underneath
+pxcli export_sheet sheet.png --cols 4
+```
+
 Common error codes:
 
 - `invalid_command` unknown command
@@ -137,6 +155,7 @@ Common error codes:
 - `invalid_palette` palette management error (e.g. `palette use`/`palette list` on an undefined palette)
 - `invalid_clipboard` `paste` referenced a clipboard slot that has not been `copy`'d into yet
 - `invalid_layer` referenced a layer name that doesn't exist (`layer select`/`layer visible`)
+- `invalid_frame` referenced a frame index that doesn't exist (`frame select`/`frame ghost`)
 - `out_of_bounds` coordinate outside canvas
 - `no_history` undo/redo with empty history
 - `io` export file error

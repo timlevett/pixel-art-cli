@@ -123,6 +123,97 @@ func TestExportCmd_ResolvesAbsolutePath(t *testing.T) {
 	}
 }
 
+func TestExportSheetCmd_ResolvesAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("unexpected getwd error: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("unexpected chdir error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+
+	expected, err := filepath.Abs("sheet.png")
+	if err != nil {
+		t.Fatalf("unexpected abs error: %v", err)
+	}
+
+	stub := &stubClient{response: client.Response{Raw: "ok"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(buf)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"export_sheet", "sheet.png"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected export_sheet error: %v", err)
+	}
+	if len(stub.requests) != 1 || stub.requests[0] != "export_sheet "+expected {
+		t.Fatalf("expected export_sheet request %q, got %v", "export_sheet "+expected, stub.requests)
+	}
+}
+
+func TestExportSheetCmd_ColsFlagFormatsRequest(t *testing.T) {
+	stub := &stubClient{response: client.Response{Raw: "ok"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sheet.png")
+
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"export_sheet", path, "--cols", "3"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected export_sheet error: %v", err)
+	}
+	if len(stub.requests) != 1 || stub.requests[0] != "export_sheet "+path+" 3" {
+		t.Fatalf("expected cols in request, got %v", stub.requests)
+	}
+}
+
+func TestExportSheetCmd_PropagatesDaemonError(t *testing.T) {
+	stub := &stubClient{err: client.Error{Code: "invalid_args", Message: "cols must be a positive integer"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"export_sheet", "sheet.png"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected error propagated from daemon")
+	}
+	if !strings.Contains(err.Error(), "err invalid_args") {
+		t.Fatalf("expected invalid_args error, got %q", err.Error())
+	}
+}
+
 func TestExportCmd_PropagatesIOError(t *testing.T) {
 	stub := &stubClient{err: client.Error{Code: "io", Message: "permission denied"}}
 	restore := drawNewClient
