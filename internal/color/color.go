@@ -3,6 +3,7 @@ package color
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"strings"
 )
 
@@ -102,6 +103,21 @@ func Parse(input string) (color.RGBA, error) {
 		return color.RGBA{R: r, G: g, B: b, A: a}, nil
 	default:
 		return color.RGBA{}, Error{Code: "invalid_color", Message: fmt.Sprintf("invalid hex length %d", len(hex))}
+	}
+}
+
+// Blend linearly interpolates each channel between a and b. ratio 0 returns
+// a, ratio 1 returns b; the caller is responsible for clamping ratio to
+// [0,1] beforehand.
+func Blend(a, b color.RGBA, ratio float64) color.RGBA {
+	lerp := func(x, y uint8) uint8 {
+		return uint8(math.Round(float64(x) + (float64(y)-float64(x))*ratio))
+	}
+	return color.RGBA{
+		R: lerp(a.R, b.R),
+		G: lerp(a.G, b.G),
+		B: lerp(a.B, b.B),
+		A: lerp(a.A, b.A),
 	}
 }
 

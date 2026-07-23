@@ -44,6 +44,8 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(NewPasteCmd())
 	cmd.AddCommand(NewMoveCmd())
 	cmd.AddCommand(NewMirrorCmd())
+	cmd.AddCommand(NewBlendCmd())
+	cmd.AddCommand(NewInspectCmd())
 	cmd.AddCommand(NewGetPixelCmd())
 	cmd.AddCommand(NewExportCmd())
 	cmd.AddCommand(NewUndoCmd())

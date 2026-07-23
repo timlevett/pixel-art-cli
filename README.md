@@ -104,6 +104,13 @@ Utility:
 - `pxcli export <filename.png>`
 - `pxcli undo`
 - `pxcli redo`
+- `pxcli blend <color1> <color2> <ratio>` — compute a linearly interpolated color (`ratio` 0 = `color1`, 1 = `color2`) for anti-aliasing edge colors by hand. Read-only; both colors accept palette references.
+- `pxcli inspect [x y w h]` — dump the canvas (or a sub-region) as a text grid, one row per line, colors space-separated. A fast alternative to `export` + reading the image back, useful when an agent has no image-reading tool. Read-only.
+
+```bash
+pxcli blend "#000000" "#ffffff" 0.5   # -> ok #808080ff
+pxcli inspect 0 0 4 4
+```
 
 Common error codes:
 
