@@ -214,6 +214,116 @@ func TestExportSheetCmd_PropagatesDaemonError(t *testing.T) {
 	}
 }
 
+func TestImportReferenceCmd_DefaultOpacityOmittedFromRequest(t *testing.T) {
+	stub := &stubClient{response: client.Response{Raw: "ok"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"import_reference", "ref.png"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.requests) != 1 || stub.requests[0] != "import_reference ref.png" {
+		t.Fatalf("expected request without opacity, got %v", stub.requests)
+	}
+}
+
+func TestImportReferenceCmd_ExplicitOpacityFormatsRequest(t *testing.T) {
+	stub := &stubClient{response: client.Response{Raw: "ok"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"import_reference", "ref.png", "--opacity", "0.8"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.requests) != 1 || stub.requests[0] != "import_reference ref.png 0.8" {
+		t.Fatalf("expected request with opacity, got %v", stub.requests)
+	}
+}
+
+func TestImportReferenceCmd_DaemonErrorPassthrough(t *testing.T) {
+	stub := &stubClient{response: client.Response{Raw: "err io unable to decode image: unknown format"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(buf)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"import_reference", "ref.png"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "unable to decode image") {
+		t.Fatalf("expected daemon error passthrough, got %q", buf.String())
+	}
+}
+
+func TestExportDebugCmd_ResolvesAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("unexpected getwd error: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("unexpected chdir error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+
+	expected, err := filepath.Abs("debug.png")
+	if err != nil {
+		t.Fatalf("unexpected abs error: %v", err)
+	}
+
+	stub := &stubClient{response: client.Response{Raw: "ok"}}
+	restore := drawNewClient
+	drawNewClient = func(socketPath string) (requestSender, error) {
+		return stub, nil
+	}
+	t.Cleanup(func() {
+		drawNewClient = restore
+	})
+
+	cmd := NewRootCmd("dev")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"export_debug", "debug.png"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected export_debug error: %v", err)
+	}
+	if len(stub.requests) != 1 || stub.requests[0] != "export_debug "+expected {
+		t.Fatalf("expected export_debug request %q, got %v", "export_debug "+expected, stub.requests)
+	}
+}
+
 func TestExportCmd_PropagatesIOError(t *testing.T) {
 	stub := &stubClient{err: client.Error{Code: "io", Message: "permission denied"}}
 	restore := drawNewClient

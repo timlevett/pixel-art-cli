@@ -15,6 +15,7 @@ import (
 	"pxcli/internal/layer"
 	"pxcli/internal/palette"
 	"pxcli/internal/protocol"
+	"pxcli/internal/underlay"
 )
 
 // errScriptFailed marks a script batch mutation as failed; the actual
@@ -26,11 +27,14 @@ var errScriptFailed = errors.New("script failed")
 // (see internal/frame); the windowed renderer is wired directly to the
 // original canvas passed into NewHandler (i.e. frame 0's "base" layer) and
 // does not reflect other frames/layers until export/export_sheet flattens
-// them.
+// them. The imported reference image (see internal/underlay), if any, is
+// global (not per-frame/layer): it is never drawable and never included in
+// a plain export, only in export_debug and the windowed view.
 type Handler struct {
 	frames    *frame.Store
 	palette   *palette.Store
 	clipboard *clipboard.Store
+	underlay  *underlay.Store
 	onStop    func()
 }
 
@@ -38,12 +42,20 @@ type Handler struct {
 // the provided history manager, so behavior is unchanged from before
 // frames/layers existed until a frame or layer is added and selected.
 func NewHandler(history *history.Manager, onStop func()) *Handler {
+	base := history.Canvas()
 	return &Handler{
-		frames:    frame.New(history.Canvas(), history),
+		frames:    frame.New(base, history),
 		palette:   palette.New(),
 		clipboard: clipboard.New(),
+		underlay:  underlay.New(base.Width(), base.Height()),
 		onStop:    onStop,
 	}
+}
+
+// Underlay exposes the handler's underlay store so the windowed renderer
+// wiring (see run_windowed.go) can composite it beneath frame 0's canvas.
+func (h *Handler) Underlay() *underlay.Store {
+	return h.underlay
 }
 
 // layerStore returns the active frame's layer store.
@@ -117,6 +129,10 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handleFrameGhost(request.Args)
 	case "export_sheet":
 		return h.handleExportSheet(request.Args)
+	case "import_reference":
+		return h.handleImportReference(request.Args)
+	case "export_debug":
+		return h.handleExportDebug(request.Args)
 	case "stop":
 		return h.handleStop(request.Args)
 	default:
@@ -962,6 +978,45 @@ func (h *Handler) handleExportSheet(args []string) string {
 	return protocol.FormatOK("")
 }
 
+// handleImportReference decodes a local PNG/JPEG file, resizes it to the
+// canvas dimensions, dims it to opacity (default 0.35), and stores it as
+// the global underlay: a non-drawable reference visible in windowed mode
+// and via export_debug, but never in a plain export.
+func (h *Handler) handleImportReference(args []string) string {
+	if len(args) != 1 && len(args) != 2 {
+		return formatError(handlerError{Code: "invalid_args", Message: fmt.Sprintf("expected 1 arg (path) or 2 args (path opacity), got %d", len(args))})
+	}
+	opacity := 0.35
+	if len(args) == 2 {
+		var err error
+		opacity, err = strconv.ParseFloat(args[1], 64)
+		if err != nil {
+			return formatError(handlerError{Code: "invalid_args", Message: "opacity must be a number between 0 and 1"})
+		}
+	}
+	if err := h.underlay.Import(args[0], opacity); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// handleExportDebug writes the flattened composite of the active frame's
+// visible layers with the imported reference underlay (if any) drawn
+// beneath it, unlike plain export which never includes the underlay.
+func (h *Handler) handleExportDebug(args []string) string {
+	if len(args) != 1 {
+		return invalidArgCount(1, len(args))
+	}
+	composed, err := h.underlay.CompositeUnder(h.layerStore().Flatten())
+	if err != nil {
+		return formatError(err)
+	}
+	if err := composed.ExportPNG(args[0]); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
 func (h *Handler) handleStop(args []string) string {
 	if len(args) != 0 {
 		return invalidArgCount(0, len(args))
@@ -1040,6 +1095,10 @@ func errorCodeAndMessage(err error) (string, string) {
 	var frameErr frame.Error
 	if errors.As(err, &frameErr) {
 		return frameErr.Code, frameErr.Message
+	}
+	var underlayErr underlay.Error
+	if errors.As(err, &underlayErr) {
+		return underlayErr.Code, underlayErr.Message
 	}
 	var histErr history.Error
 	if errors.As(err, &histErr) {
