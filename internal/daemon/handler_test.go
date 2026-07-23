@@ -97,6 +97,152 @@ func TestHandlerClearDefaultTransparent(t *testing.T) {
 	}
 }
 
+func TestHandlerScriptExecutesAllCommands(t *testing.T) {
+	target, err := canvas.New(4, 4)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	handler := NewHandler(history.New(target), nil)
+
+	response := handler.HandleScript([]string{
+		"# a comment",
+		"",
+		"set_pixel 0 0 red",
+		"fill_rect 1 1 2 2 blue",
+		"line 0 3 3 3 red",
+	})
+	if response != "ok" {
+		t.Fatalf("expected ok, got %q", response)
+	}
+
+	value, err := target.GetPixel(0, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != (color.RGBA{R: 255, G: 0, B: 0, A: 255}) {
+		t.Fatalf("expected red pixel at (0,0), got %+v", value)
+	}
+	value, err = target.GetPixel(2, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != (color.RGBA{R: 0, G: 0, B: 255, A: 255}) {
+		t.Fatalf("expected blue pixel at (2,2), got %+v", value)
+	}
+	value, err = target.GetPixel(3, 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != (color.RGBA{R: 255, G: 0, B: 0, A: 255}) {
+		t.Fatalf("expected red pixel at (3,3), got %+v", value)
+	}
+}
+
+func TestHandlerScriptIsSingleUndoStep(t *testing.T) {
+	target, err := canvas.New(2, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	manager := history.New(target)
+	handler := NewHandler(manager, nil)
+
+	response := handler.HandleScript([]string{
+		"set_pixel 0 0 red",
+		"set_pixel 1 1 blue",
+	})
+	if response != "ok" {
+		t.Fatalf("expected ok, got %q", response)
+	}
+
+	if err := manager.Undo(); err != nil {
+		t.Fatalf("unexpected undo error: %v", err)
+	}
+	value, err := target.GetPixel(0, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != (color.RGBA{}) {
+		t.Fatalf("expected undo to revert whole batch, got %+v at (0,0)", value)
+	}
+	value, err = target.GetPixel(1, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != (color.RGBA{}) {
+		t.Fatalf("expected undo to revert whole batch, got %+v at (1,1)", value)
+	}
+
+	if err := manager.Undo(); err == nil {
+		t.Fatalf("expected no further history after single undo")
+	}
+}
+
+func TestHandlerScriptStopsAtFirstErrorAndRollsBack(t *testing.T) {
+	target, err := canvas.New(2, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	manager := history.New(target)
+	handler := NewHandler(manager, nil)
+
+	response := handler.HandleScript([]string{
+		"set_pixel 0 0 red",
+		"set_pixel 9 9 red",
+		"set_pixel 1 1 blue",
+	})
+	if !strings.HasPrefix(response, "err ") {
+		t.Fatalf("expected error response, got %q", response)
+	}
+	if !strings.Contains(response, "line 2") {
+		t.Fatalf("expected error to reference line 2, got %q", response)
+	}
+
+	value, err := target.GetPixel(0, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != (color.RGBA{}) {
+		t.Fatalf("expected canvas rolled back after script failure, got %+v at (0,0)", value)
+	}
+
+	if err := manager.Undo(); err == nil {
+		t.Fatalf("expected failed script not to create an undo entry")
+	}
+}
+
+func TestHandlerScriptRejectsUnsupportedCommand(t *testing.T) {
+	target, err := canvas.New(2, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	handler := NewHandler(history.New(target), nil)
+
+	response := handler.HandleScript([]string{"undo"})
+	if !strings.HasPrefix(response, "err invalid_command ") {
+		t.Fatalf("expected invalid_command error, got %q", response)
+	}
+	if !strings.Contains(response, "line 1") {
+		t.Fatalf("expected error to reference line 1, got %q", response)
+	}
+}
+
+func TestHandlerScriptEmptyIsNoop(t *testing.T) {
+	target, err := canvas.New(2, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	manager := history.New(target)
+	handler := NewHandler(manager, nil)
+
+	response := handler.HandleScript([]string{"", "# just a comment"})
+	if response != "ok" {
+		t.Fatalf("expected ok, got %q", response)
+	}
+	if err := manager.Undo(); err == nil {
+		t.Fatalf("expected no undo entry for an empty script")
+	}
+}
+
 func TestHandlerStopTriggersCallback(t *testing.T) {
 	target, err := canvas.New(2, 2)
 	if err != nil {

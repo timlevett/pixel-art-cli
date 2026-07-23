@@ -56,6 +56,18 @@ Drawing:
 - `pxcli line <x1> <y1> <x2> <y2> <color>`
 - `pxcli clear [color]`
 
+Batch execution:
+
+- `pxcli script <file>` — run newline-separated `set_pixel`/`fill_rect`/`line`/`clear` commands from a file over a single connection, instead of one process + socket round trip per command. Use `pxcli script` (no file arg, or `-`) to read from stdin.
+  - Blank lines and lines starting with `#` are ignored.
+  - The whole batch is applied as **one undoable step**: `pxcli undo` reverts the entire script, not individual commands.
+  - On a malformed or failing line, execution stops immediately, the canvas is rolled back to its pre-script state (nothing partially applied), and the error reports the offending line number, e.g. `err invalid_args line 3: x must be an integer`.
+  - Only mutating commands (`set_pixel`, `fill_rect`, `line`, `clear`) are allowed inside a script.
+
+```bash
+pxcli script art.pxs
+```
+
 Utility:
 
 - `pxcli get_pixel <x> <y>`

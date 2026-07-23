@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"pxcli/internal/client"
 	"pxcli/internal/config"
 	"pxcli/internal/testutil"
 )
@@ -78,6 +79,66 @@ func TestHeadlessProtocolIntegration(t *testing.T) {
 	assertPathMissing(t, pidPath)
 	assertPathMissing(t, socketPath)
 	stopped = true
+}
+
+func TestHeadlessScriptIntegration(t *testing.T) {
+	dir := testutil.TempDir(t)
+	socketPath := filepath.Join(dir, "pxcli.sock")
+	pidPath := filepath.Join(dir, "pxcli.pid")
+	cfg := config.New(
+		config.WithSocketPath(socketPath),
+		config.WithPIDPath(pidPath),
+		config.WithCanvasSize(4, 4),
+	)
+
+	done := startHeadlessRuntime(t, cfg)
+	t.Cleanup(func() {
+		if _, err := os.Stat(socketPath); err == nil {
+			_, _ = sendRequest(socketPath, "stop\n")
+		}
+		assertRuntimeDone(t, done)
+	})
+
+	cli, err := client.New(socketPath)
+	if err != nil {
+		t.Fatalf("unexpected error creating client: %v", err)
+	}
+
+	resp, err := cli.SendScript([]string{
+		"# draw a small sprite",
+		"",
+		"set_pixel 0 0 red",
+		"fill_rect 1 1 2 2 blue",
+	})
+	if err != nil {
+		t.Fatalf("unexpected script error: %v", err)
+	}
+	if resp.Raw != "ok" {
+		t.Fatalf("expected ok response, got %q", resp.Raw)
+	}
+
+	expectResponse(t, mustSendRequest(t, socketPath, "get_pixel 0 0\n"), "ok #ff0000ff\n")
+	expectResponse(t, mustSendRequest(t, socketPath, "get_pixel 2 2\n"), "ok #0000ffff\n")
+
+	// The whole script must be one undo step.
+	expectResponse(t, mustSendRequest(t, socketPath, "undo\n"), "ok\n")
+	expectResponse(t, mustSendRequest(t, socketPath, "get_pixel 0 0\n"), "ok #00000000\n")
+	expectResponse(t, mustSendRequest(t, socketPath, "get_pixel 2 2\n"), "ok #00000000\n")
+
+	// A malformed line must stop execution, report the line number, and
+	// leave the canvas unchanged.
+	_, err = cli.SendScript([]string{
+		"set_pixel 0 0 red",
+		"set_pixel 99 99 red",
+		"set_pixel 1 1 blue",
+	})
+	if err == nil {
+		t.Fatalf("expected error from malformed script")
+	}
+	if !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("expected error to reference line 2, got %v", err)
+	}
+	expectResponse(t, mustSendRequest(t, socketPath, "get_pixel 0 0\n"), "ok #00000000\n")
 }
 
 func expectResponse(t *testing.T, response, expected string) {
