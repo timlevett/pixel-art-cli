@@ -10,6 +10,7 @@ import (
 	"pxcli/internal/canvas"
 	"pxcli/internal/clipboard"
 	pxcolor "pxcli/internal/color"
+	"pxcli/internal/frame"
 	"pxcli/internal/history"
 	"pxcli/internal/layer"
 	"pxcli/internal/palette"
@@ -21,32 +22,38 @@ import (
 var errScriptFailed = errors.New("script failed")
 
 // Handler maps protocol requests to canvas operations. Drawing/undo/export
-// commands act on the active layer (see internal/layer); the windowed
-// renderer is wired directly to the original canvas passed into NewHandler
-// (i.e. the "base" layer) and does not reflect other layers until export
-// flattens them.
+// commands act on the active layer (see internal/layer) of the active frame
+// (see internal/frame); the windowed renderer is wired directly to the
+// original canvas passed into NewHandler (i.e. frame 0's "base" layer) and
+// does not reflect other frames/layers until export/export_sheet flattens
+// them.
 type Handler struct {
-	layers    *layer.Store
+	frames    *frame.Store
 	palette   *palette.Store
 	clipboard *clipboard.Store
 	onStop    func()
 }
 
-// NewHandler creates a command handler whose "base" layer wraps the
-// provided history manager, so behavior is unchanged from before layers
-// existed until a layer is added and selected.
+// NewHandler creates a command handler whose frame 0 / "base" layer wraps
+// the provided history manager, so behavior is unchanged from before
+// frames/layers existed until a frame or layer is added and selected.
 func NewHandler(history *history.Manager, onStop func()) *Handler {
 	return &Handler{
-		layers:    layer.New(history.Canvas(), history),
+		frames:    frame.New(history.Canvas(), history),
 		palette:   palette.New(),
 		clipboard: clipboard.New(),
 		onStop:    onStop,
 	}
 }
 
+// layerStore returns the active frame's layer store.
+func (h *Handler) layerStore() *layer.Store {
+	return h.frames.Active()
+}
+
 // active returns the currently selected layer's canvas + history pair.
 func (h *Handler) active() *layer.Entry {
-	return h.layers.Active()
+	return h.layerStore().Active()
 }
 
 // Handle executes a command and returns a single-line protocol response.
@@ -100,6 +107,16 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handleLayerSelect(request.Args)
 	case "layer_visible":
 		return h.handleLayerVisible(request.Args)
+	case "frame_add":
+		return h.handleFrameAdd(request.Args)
+	case "frame_list":
+		return h.handleFrameList(request.Args)
+	case "frame_select":
+		return h.handleFrameSelect(request.Args)
+	case "frame_ghost":
+		return h.handleFrameGhost(request.Args)
+	case "export_sheet":
+		return h.handleExportSheet(request.Args)
 	case "stop":
 		return h.handleStop(request.Args)
 	default:
@@ -541,7 +558,7 @@ func (h *Handler) handleExport(args []string) string {
 	if len(args) != 1 {
 		return invalidArgCount(1, len(args))
 	}
-	if err := h.layers.Flatten().ExportPNG(args[0]); err != nil {
+	if err := h.layerStore().Flatten().ExportPNG(args[0]); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -774,6 +791,13 @@ func (h *Handler) handleInspect(args []string) string {
 	if err != nil {
 		return formatError(err)
 	}
+	return protocol.FormatOK(formatGrid(pixels, w, hgt))
+}
+
+// formatGrid renders row-major pixel data as a text grid of canonical
+// #rrggbbaa colors: rows separated by ";", cells within a row separated by
+// ",". Shared by handleInspect and handleFrameGhost.
+func formatGrid(pixels []color.RGBA, w, hgt int) string {
 	rows := make([]string, hgt)
 	for row := 0; row < hgt; row++ {
 		cells := make([]string, w)
@@ -782,7 +806,7 @@ func (h *Handler) handleInspect(args []string) string {
 		}
 		rows[row] = strings.Join(cells, ",")
 	}
-	return protocol.FormatOK(strings.Join(rows, ";"))
+	return strings.Join(rows, ";")
 }
 
 // handleLayerAdd creates a new blank, visible layer sized to match the
@@ -792,7 +816,7 @@ func (h *Handler) handleLayerAdd(args []string) string {
 	if len(args) != 1 {
 		return invalidArgCount(1, len(args))
 	}
-	if err := h.layers.Add(args[0]); err != nil {
+	if err := h.layerStore().Add(args[0]); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -803,7 +827,7 @@ func (h *Handler) handleLayerList(args []string) string {
 	if len(args) != 0 {
 		return invalidArgCount(0, len(args))
 	}
-	return protocol.FormatOK(strings.Join(h.layers.List(), ","))
+	return protocol.FormatOK(strings.Join(h.layerStore().List(), ","))
 }
 
 // handleLayerSelect sets the active layer: drawing commands, get_pixel,
@@ -812,7 +836,7 @@ func (h *Handler) handleLayerSelect(args []string) string {
 	if len(args) != 1 {
 		return invalidArgCount(1, len(args))
 	}
-	if err := h.layers.Select(args[0]); err != nil {
+	if err := h.layerStore().Select(args[0]); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -828,7 +852,111 @@ func (h *Handler) handleLayerVisible(args []string) string {
 	if err != nil {
 		return formatError(handlerError{Code: "invalid_args", Message: "visibility must be true or false"})
 	}
-	if err := h.layers.SetVisible(args[0], visible); err != nil {
+	if err := h.layerStore().SetVisible(args[0], visible); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// handleFrameAdd creates a new blank frame (its own independent layer
+// stack, starting with just "base") and returns its 0-based index. The new
+// frame does not become active.
+func (h *Handler) handleFrameAdd(args []string) string {
+	if len(args) != 0 {
+		return invalidArgCount(0, len(args))
+	}
+	idx, err := h.frames.Add()
+	if err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK(strconv.Itoa(idx))
+}
+
+// handleFrameList lists frame indices in creation order, e.g. "0,1,2".
+func (h *Handler) handleFrameList(args []string) string {
+	if len(args) != 0 {
+		return invalidArgCount(0, len(args))
+	}
+	count := h.frames.Count()
+	indices := make([]string, count)
+	for i := range indices {
+		indices[i] = strconv.Itoa(i)
+	}
+	return protocol.FormatOK(strings.Join(indices, ","))
+}
+
+// handleFrameSelect sets the active frame: drawing commands, get_pixel,
+// inspect, undo, redo, layer_*, and export all act on whichever frame is
+// currently active.
+func (h *Handler) handleFrameSelect(args []string) string {
+	if len(args) != 1 {
+		return invalidArgCount(1, len(args))
+	}
+	idx, err := parseIntArg(args[0], "index")
+	if err != nil {
+		return formatError(err)
+	}
+	if err := h.frames.Select(idx); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// handleFrameGhost returns an onion-skin text grid (same format as
+// inspect) for the active frame: the target frame's flattened content
+// dimmed to opacity (default 0.35) sits underneath, with the active
+// frame's own flattened content drawn on top at full strength. It is a
+// pure query, like inspect — nothing is mutated.
+func (h *Handler) handleFrameGhost(args []string) string {
+	if len(args) != 1 && len(args) != 2 {
+		return formatError(handlerError{Code: "invalid_args", Message: fmt.Sprintf("expected 1 arg (index) or 2 args (index opacity), got %d", len(args))})
+	}
+	idx, err := parseIntArg(args[0], "index")
+	if err != nil {
+		return formatError(err)
+	}
+	opacity := 0.35
+	if len(args) == 2 {
+		opacity, err = strconv.ParseFloat(args[1], 64)
+		if err != nil {
+			return formatError(handlerError{Code: "invalid_args", Message: "opacity must be a number between 0 and 1"})
+		}
+		if opacity < 0 || opacity > 1 {
+			return formatError(handlerError{Code: "invalid_args", Message: "opacity must be between 0 and 1"})
+		}
+	}
+	ghosted, err := h.frames.Ghost(idx, opacity)
+	if err != nil {
+		return formatError(err)
+	}
+	pixels, err := ghosted.CopyRegion(0, 0, ghosted.Width(), ghosted.Height())
+	if err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK(formatGrid(pixels, ghosted.Width(), ghosted.Height()))
+}
+
+// handleExportSheet tiles every frame's flattened content into a single
+// PNG, cols frames per row (default: all frames in one row), wrapping to a
+// new row every cols frames and padding any incomplete final row with
+// transparent pixels.
+func (h *Handler) handleExportSheet(args []string) string {
+	if len(args) != 1 && len(args) != 2 {
+		return formatError(handlerError{Code: "invalid_args", Message: fmt.Sprintf("expected 1 arg (path) or 2 args (path cols), got %d", len(args))})
+	}
+	cols := 0
+	if len(args) == 2 {
+		var err error
+		cols, err = strconv.Atoi(args[1])
+		if err != nil || cols <= 0 {
+			return formatError(handlerError{Code: "invalid_args", Message: "cols must be a positive integer"})
+		}
+	}
+	sheet, err := h.frames.Sheet(cols)
+	if err != nil {
+		return formatError(err)
+	}
+	if err := sheet.ExportPNG(args[0]); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -908,6 +1036,10 @@ func errorCodeAndMessage(err error) (string, string) {
 	var layerErr layer.Error
 	if errors.As(err, &layerErr) {
 		return layerErr.Code, layerErr.Message
+	}
+	var frameErr frame.Error
+	if errors.As(err, &frameErr) {
+		return frameErr.Code, frameErr.Message
 	}
 	var histErr history.Error
 	if errors.As(err, &histErr) {

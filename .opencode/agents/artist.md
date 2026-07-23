@@ -69,6 +69,20 @@ Utility:
 - `./pxcli blend <color1> <color2> <ratio>` — interpolate two colors (0=first, 1=second) to compute an anti-aliasing edge color instead of guessing hex values.
 - `./pxcli inspect [x y w h]` — dump the canvas (or a region) as a text grid of colors, one row per line; faster than export+read for a quick sanity check.
 
+Layers — keep background/sprite/effects separable instead of drawing onto one flat canvas:
+
+- `./pxcli layer add <name>` — new blank, visible layer. `base` always exists and can't be re-added.
+- `./pxcli layer list` / `./pxcli layer select <name>` / `./pxcli layer visible <name> <true|false>`
+- Drawing, `get_pixel`, `inspect`, `undo`, `redo` all act on whichever layer is currently active (each has its own undo history). `export` flattens every visible layer into the output PNG, but never merges layers into each other — the windowed view only ever shows `base`.
+
+Frames — for animation cycles (walk/idle/attack), each frame is its own independent layer stack, addressed by index instead of name:
+
+- `./pxcli frame add` — new blank frame, prints its 0-based index. Frame `0` always exists.
+- `./pxcli frame list` / `./pxcli frame select <index>`
+- `./pxcli frame ghost <index> [opacity]` (default `0.35`) — onion-skinning: text grid (like `inspect`) of the active frame with another frame dimmed underneath, so you can keep a pose consistent with the previous frame without eyeballing separate exports.
+- `./pxcli export_sheet <filename.png> [--cols N]` — tile every frame into a single sprite-sheet PNG (default: all frames in one row).
+- Workflow: draw frame 0, `frame add` + `frame select` per subsequent pose, `frame ghost` the previous frame while drawing the next, `export_sheet` once every frame is done.
+
 Colors should be in hex format: `#rgb`, `#rrggbb`, `#rrggbbaa`, a named color, or a palette reference (`<name>:<index>` / `p:<index>`)
 
 Examples:

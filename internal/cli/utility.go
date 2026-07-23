@@ -52,3 +52,33 @@ func NewExportCmd() *cobra.Command {
 
 	return cmd
 }
+
+// NewExportSheetCmd creates the export_sheet command.
+func NewExportSheetCmd() *cobra.Command {
+	var cols int
+
+	cmd := &cobra.Command{
+		Use:   "export_sheet <filename.png>",
+		Short: "Export every frame tiled into a single sprite-sheet PNG (default: all frames in one row; --cols wraps to a new row)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return invalidArgCount(1, len(args))
+			}
+			absPath, err := filepath.Abs(args[0])
+			if err != nil {
+				return invalidArgsf("invalid path: %v", err)
+			}
+			request := fmt.Sprintf("export_sheet %s", absPath)
+			if cols > 0 {
+				request = fmt.Sprintf("export_sheet %s %d", absPath, cols)
+			}
+			return sendCommandRequest(cmd, request)
+		},
+	}
+	cmd.Flags().IntVar(&cols, "cols", 0, "Frames per row (default: all frames in one row)")
+	// Deliberately interspersed (unlike other commands): the only positional
+	// here is a file path, which can't be confused with a flag, so --cols
+	// works naturally after the path (`export_sheet out.png --cols 2`).
+
+	return cmd
+}
