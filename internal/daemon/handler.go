@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pxcli/internal/canvas"
+	"pxcli/internal/clipboard"
 	pxcolor "pxcli/internal/color"
 	"pxcli/internal/history"
 	"pxcli/internal/palette"
@@ -20,14 +21,15 @@ var errScriptFailed = errors.New("script failed")
 
 // Handler maps protocol requests to canvas operations.
 type Handler struct {
-	history *history.Manager
-	palette *palette.Store
-	onStop  func()
+	history   *history.Manager
+	palette   *palette.Store
+	clipboard *clipboard.Store
+	onStop    func()
 }
 
 // NewHandler creates a command handler for the provided history manager.
 func NewHandler(history *history.Manager, onStop func()) *Handler {
-	return &Handler{history: history, palette: palette.New(), onStop: onStop}
+	return &Handler{history: history, palette: palette.New(), clipboard: clipboard.New(), onStop: onStop}
 }
 
 // Handle executes a command and returns a single-line protocol response.
@@ -49,6 +51,14 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handleEllipse(request.Args)
 	case "dither_fill":
 		return h.handleDitherFill(request.Args)
+	case "copy":
+		return h.handleCopy(request.Args)
+	case "paste":
+		return h.handlePaste(request.Args)
+	case "move":
+		return h.handleMove(request.Args)
+	case "mirror":
+		return h.handleMirror(request.Args)
 	case "export":
 		return h.handleExport(request.Args)
 	case "undo":
@@ -344,6 +354,157 @@ func applyDitherFill(c *canvas.Canvas, store *palette.Store, args []string) erro
 	return c.DitherFill(x, y, w, hgt, color1, color2, pattern)
 }
 
+// handleCopy captures a rectangle into a named clipboard slot. It reads the
+// canvas but does not mutate it, so it is not recorded in undo/redo history.
+// args is <x> <y> <w> <h> with an optional trailing clipboard name
+// (default clipboard.DefaultName).
+func (h *Handler) handleCopy(args []string) string {
+	name := clipboard.DefaultName
+	if len(args) == 5 {
+		name = args[4]
+		args = args[:4]
+	}
+	if len(args) != 4 {
+		return invalidArgCount(4, len(args))
+	}
+	x, err := parseIntArg(args[0], "x")
+	if err != nil {
+		return formatError(err)
+	}
+	y, err := parseIntArg(args[1], "y")
+	if err != nil {
+		return formatError(err)
+	}
+	w, err := parseIntArg(args[2], "w")
+	if err != nil {
+		return formatError(err)
+	}
+	hgt, err := parseIntArg(args[3], "h")
+	if err != nil {
+		return formatError(err)
+	}
+	pixels, err := h.history.Canvas().CopyRegion(x, y, w, hgt)
+	if err != nil {
+		return formatError(err)
+	}
+	if err := h.clipboard.Set(name, clipboard.Region{Width: w, Height: hgt, Pixels: pixels}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+func (h *Handler) handlePaste(args []string) string {
+	if err := h.history.Apply(func(c *canvas.Canvas) error {
+		return applyPaste(c, h.clipboard, args)
+	}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// applyPaste stamps a clipboard region with its top-left corner at (x,y).
+// args is <x> <y> with an optional trailing clipboard name (default
+// clipboard.DefaultName).
+func applyPaste(c *canvas.Canvas, store *clipboard.Store, args []string) error {
+	name := clipboard.DefaultName
+	if len(args) == 3 {
+		name = args[2]
+		args = args[:2]
+	}
+	if len(args) != 2 {
+		return invalidArgCountErr(2, len(args))
+	}
+	x, err := parseIntArg(args[0], "x")
+	if err != nil {
+		return err
+	}
+	y, err := parseIntArg(args[1], "y")
+	if err != nil {
+		return err
+	}
+	region, err := store.Get(name)
+	if err != nil {
+		return err
+	}
+	return c.PasteRegion(x, y, region.Width, region.Height, region.Pixels)
+}
+
+func (h *Handler) handleMove(args []string) string {
+	if err := h.history.Apply(func(c *canvas.Canvas) error {
+		return applyMove(c, args)
+	}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// applyMove relocates a rectangle by an offset. args is
+// <x> <y> <w> <h> <dx> <dy>.
+func applyMove(c *canvas.Canvas, args []string) error {
+	if len(args) != 6 {
+		return invalidArgCountErr(6, len(args))
+	}
+	x, err := parseIntArg(args[0], "x")
+	if err != nil {
+		return err
+	}
+	y, err := parseIntArg(args[1], "y")
+	if err != nil {
+		return err
+	}
+	w, err := parseIntArg(args[2], "w")
+	if err != nil {
+		return err
+	}
+	hgt, err := parseIntArg(args[3], "h")
+	if err != nil {
+		return err
+	}
+	dx, err := parseIntArg(args[4], "dx")
+	if err != nil {
+		return err
+	}
+	dy, err := parseIntArg(args[5], "dy")
+	if err != nil {
+		return err
+	}
+	return c.MoveRegion(x, y, w, hgt, dx, dy)
+}
+
+func (h *Handler) handleMirror(args []string) string {
+	if err := h.history.Apply(func(c *canvas.Canvas) error {
+		return applyMirror(c, args)
+	}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// applyMirror flips a rectangle in place. args is
+// <x> <y> <w> <h> <horizontal|vertical>.
+func applyMirror(c *canvas.Canvas, args []string) error {
+	if len(args) != 5 {
+		return invalidArgCountErr(5, len(args))
+	}
+	x, err := parseIntArg(args[0], "x")
+	if err != nil {
+		return err
+	}
+	y, err := parseIntArg(args[1], "y")
+	if err != nil {
+		return err
+	}
+	w, err := parseIntArg(args[2], "w")
+	if err != nil {
+		return err
+	}
+	hgt, err := parseIntArg(args[3], "h")
+	if err != nil {
+		return err
+	}
+	return c.MirrorRegion(x, y, w, hgt, args[4])
+}
+
 func (h *Handler) handleExport(args []string) string {
 	if len(args) != 1 {
 		return invalidArgCount(1, len(args))
@@ -377,7 +538,9 @@ func (h *Handler) handleRedo(args []string) string {
 // HandleScript executes a batch of newline-separated commands as a single
 // undoable step. Blank lines and lines starting with '#' are ignored; only
 // canvas-mutating commands (set_pixel, fill_rect, line, clear, circle,
-// ellipse, dither_fill) are allowed.
+// ellipse, dither_fill, paste, move, mirror) are allowed. "copy" is
+// read-only (it only writes to the clipboard, not the canvas) and is not
+// supported inside a script.
 // Execution stops at the first error, the canvas is rolled back to its
 // pre-script state, and the response reports the 1-based line number that
 // failed. On success the whole batch is recorded as one undo entry.
@@ -412,7 +575,7 @@ func (h *Handler) HandleScript(lines []string) string {
 	err := h.history.Apply(func(c *canvas.Canvas) error {
 		pre := c.Snapshot()
 		for _, cmd := range commands {
-			if err := applyScriptCommand(c, h.palette, cmd.request); err != nil {
+			if err := applyScriptCommand(c, h.palette, h.clipboard, cmd.request); err != nil {
 				code, message := errorCodeAndMessage(err)
 				failed = &failure{line: cmd.line, code: code, message: message}
 				_ = c.Restore(pre)
@@ -430,7 +593,7 @@ func (h *Handler) HandleScript(lines []string) string {
 	return protocol.FormatOK("")
 }
 
-func applyScriptCommand(c *canvas.Canvas, store *palette.Store, request protocol.Request) error {
+func applyScriptCommand(c *canvas.Canvas, store *palette.Store, clip *clipboard.Store, request protocol.Request) error {
 	switch request.Command {
 	case "set_pixel":
 		return applySetPixel(c, store, request.Args)
@@ -446,6 +609,12 @@ func applyScriptCommand(c *canvas.Canvas, store *palette.Store, request protocol
 		return applyEllipse(c, store, request.Args)
 	case "dither_fill":
 		return applyDitherFill(c, store, request.Args)
+	case "paste":
+		return applyPaste(c, clip, request.Args)
+	case "move":
+		return applyMove(c, request.Args)
+	case "mirror":
+		return applyMirror(c, request.Args)
 	default:
 		return handlerError{Code: "invalid_command", Message: fmt.Sprintf("unsupported command %q in script", request.Command)}
 	}
@@ -583,6 +752,10 @@ func errorCodeAndMessage(err error) (string, string) {
 	var palErr palette.Error
 	if errors.As(err, &palErr) {
 		return palErr.Code, palErr.Message
+	}
+	var clipErr clipboard.Error
+	if errors.As(err, &clipErr) {
+		return clipErr.Code, clipErr.Message
 	}
 	var histErr history.Error
 	if errors.As(err, &histErr) {

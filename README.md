@@ -59,13 +59,20 @@ Drawing:
 - `pxcli ellipse <cx> <cy> <rx> <ry> <color> [fill]` — ellipse outline, or a filled region with the optional trailing `fill`.
 - `pxcli dither_fill <x> <y> <w> <h> <color1> <color2> [pattern]` — fill a rectangle by alternating two colors, approximating a gradient without true per-pixel blending. `pattern` is `checkerboard` (default), `horizontal`, or `vertical`.
 
+Regions:
+
+- `pxcli copy <x> <y> <w> <h> [clipboard]` — capture a rectangle into a named clipboard slot (`default` if omitted). Read-only; not undoable (nothing on the canvas changes).
+- `pxcli paste <x> <y> [clipboard]` — stamp a previously copied region with its top-left corner at `(x,y)`.
+- `pxcli move <x> <y> <w> <h> <dx> <dy>` — relocate a rectangle by an offset, clearing the source (transparent). Source and destination may overlap safely.
+- `pxcli mirror <x> <y> <w> <h> <horizontal|vertical>` — flip a rectangle in place; `horizontal` reverses left-right, `vertical` reverses top-bottom.
+
 Batch execution:
 
-- `pxcli script <file>` — run newline-separated `set_pixel`/`fill_rect`/`line`/`clear`/`circle`/`ellipse`/`dither_fill` commands from a file over a single connection, instead of one process + socket round trip per command. Use `pxcli script` (no file arg, or `-`) to read from stdin.
+- `pxcli script <file>` — run newline-separated `set_pixel`/`fill_rect`/`line`/`clear`/`circle`/`ellipse`/`dither_fill`/`paste`/`move`/`mirror` commands from a file over a single connection, instead of one process + socket round trip per command. Use `pxcli script` (no file arg, or `-`) to read from stdin.
   - Blank lines and lines starting with `#` are ignored.
   - The whole batch is applied as **one undoable step**: `pxcli undo` reverts the entire script, not individual commands.
   - On a malformed or failing line, execution stops immediately, the canvas is rolled back to its pre-script state (nothing partially applied), and the error reports the offending line number, e.g. `err invalid_args line 3: x must be an integer`.
-  - Only mutating commands (`set_pixel`, `fill_rect`, `line`, `clear`, `circle`, `ellipse`, `dither_fill`) are allowed inside a script.
+  - Only mutating commands (`set_pixel`, `fill_rect`, `line`, `clear`, `circle`, `ellipse`, `dither_fill`, `paste`, `move`, `mirror`) are allowed inside a script. `copy` is read-only and not supported inside a script.
 
 ```bash
 pxcli script art.pxs
@@ -104,6 +111,7 @@ Common error codes:
 - `invalid_args` wrong argument count or type
 - `invalid_color` unsupported color format (including a palette reference that fails to resolve)
 - `invalid_palette` palette management error (e.g. `palette use`/`palette list` on an undefined palette)
+- `invalid_clipboard` `paste` referenced a clipboard slot that has not been `copy`'d into yet
 - `out_of_bounds` coordinate outside canvas
 - `no_history` undo/redo with empty history
 - `io` export file error
