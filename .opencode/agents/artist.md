@@ -37,6 +37,28 @@ Drawing methods
 - `./pxcli fill_rect <x> <y> <w> <h> <color>`
 - `./pxcli line <x1> <y1> <x2> <y2> <color>`
 - `./pxcli clear [color]`
+- `./pxcli circle <cx> <cy> <r> <color> [fill]` — outline by default, filled disk with trailing `fill`.
+- `./pxcli ellipse <cx> <cy> <rx> <ry> <color> [fill]` — outline by default, filled region with trailing `fill`.
+- `./pxcli dither_fill <x> <y> <w> <h> <color1> <color2> [pattern]` — alternates two colors (`checkerboard` default, `horizontal`, `vertical`) to approximate shading; there is no true gradient fill.
+
+Batch execution (use this instead of many individual calls for detailed sprites):
+
+- `./pxcli script <file>` — runs newline-separated drawing commands (including `paste`/`move`/`mirror`) from a file (or stdin) over a single connection. One process per pixel is slow; one script covering a whole sprite is not. The whole batch is a single undo step and rolls back on the first error, reporting the failing line number.
+  - Your bash permission only allows commands starting with `./pxcli`, so you can't run a separate `cat`/`echo` step to write a `.pxs` file. Pipe the batch into stdin instead, as a single `./pxcli script` invocation, e.g. `./pxcli script <<'EOF'` ... `EOF`.
+
+Regions — build one symmetric half and mirror it instead of drawing both by hand:
+
+- `./pxcli copy <x> <y> <w> <h> [clipboard]` — capture a rectangle (read-only, not undoable).
+- `./pxcli paste <x> <y> [clipboard]` — stamp a captured region elsewhere.
+- `./pxcli move <x> <y> <w> <h> <dx> <dy>` — relocate a rectangle by an offset, clearing the source.
+- `./pxcli mirror <x> <y> <w> <h> <horizontal|vertical>` — flip a rectangle in place.
+
+Palettes — define once, reference everywhere instead of repeating hex:
+
+- `./pxcli palette add <name> <color...>`
+- `./pxcli palette list [name]`
+- `./pxcli palette use <name>`
+- Any `<color>` argument (including inside `script` files) also accepts `<name>:<index>` or the active-palette shorthand `p:<index>`.
 
 Utility:
 
@@ -44,13 +66,17 @@ Utility:
 - `./pxcli export <filename.png>`
 - `./pxcli undo`
 - `./pxcli redo`
+- `./pxcli blend <color1> <color2> <ratio>` — interpolate two colors (0=first, 1=second) to compute an anti-aliasing edge color instead of guessing hex values.
+- `./pxcli inspect [x y w h]` — dump the canvas (or a region) as a text grid of colors, one row per line; faster than export+read for a quick sanity check.
 
-Colors should be in hex format: `#rgb`, `#rrggbb`, `#rrggbbaa`
+Colors should be in hex format: `#rgb`, `#rrggbb`, `#rrggbbaa`, a named color, or a palette reference (`<name>:<index>` / `p:<index>`)
 
 Examples:
 
 - `set_pixel 10 10 "#ff0000"` -> `ok`
 - `get_pixel 10 10` -> `ok #ff0000ff`
 - `set_pixel -1 10 "#ff0000"` -> `err out_of_bounds x must be >= 0`
+- `circle 16 16 8 "#ff0000" fill` -> `ok`
+- `palette add fire "#ff0000" "#ffa500"` then `set_pixel 10 10 fire:0` -> `ok`
 
-By exporting the image to the current directory with the ./pxcli export command and then reading it you get a sense of what you have drawn. Use this to improve your drawings or if just using the get_pixel command is insufficient to get a sense of what you have drawn is correct.
+By exporting the image to the current directory with the ./pxcli export command and then reading it you get a sense of what you have drawn. Use this to improve your drawings or if just using the get_pixel command is insufficient to get a sense of what you have drawn is correct. `./pxcli inspect` is a quicker text-only alternative when you just need to double check a region.
