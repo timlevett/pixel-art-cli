@@ -71,6 +71,10 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handlePaletteList(request.Args)
 	case "palette_use":
 		return h.handlePaletteUse(request.Args)
+	case "blend":
+		return h.handleBlend(request.Args)
+	case "inspect":
+		return h.handleInspect(request.Args)
 	case "stop":
 		return h.handleStop(request.Args)
 	default:
@@ -684,6 +688,73 @@ func (h *Handler) handlePaletteUse(args []string) string {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
+}
+
+// handleBlend computes a linearly interpolated color between two colors
+// (each accepting a palette reference or a raw color, like any other color
+// argument) at the given ratio (0 = first color, 1 = second color). It is a
+// pure query: it does not touch the canvas and is not part of undo history.
+func (h *Handler) handleBlend(args []string) string {
+	if len(args) != 3 {
+		return invalidArgCount(3, len(args))
+	}
+	c1, err := resolveColor(h.palette, args[0])
+	if err != nil {
+		return formatError(err)
+	}
+	c2, err := resolveColor(h.palette, args[1])
+	if err != nil {
+		return formatError(err)
+	}
+	ratio, err := strconv.ParseFloat(args[2], 64)
+	if err != nil {
+		return formatError(handlerError{Code: "invalid_args", Message: "ratio must be a number between 0 and 1"})
+	}
+	if ratio < 0 || ratio > 1 {
+		return formatError(handlerError{Code: "invalid_args", Message: "ratio must be between 0 and 1"})
+	}
+	return protocol.FormatOK(pxcolor.Format(pxcolor.Blend(c1, c2, ratio)))
+}
+
+// handleInspect dumps the canvas (or a sub-region) as a text grid of
+// canonical #rrggbbaa colors: rows separated by ";", cells within a row
+// separated by ",". It is a pure query, like get_pixel, and gives an agent
+// a fast alternative to export+read-image for sanity-checking a drawing.
+// args is either empty (whole canvas) or <x> <y> <w> <h>.
+func (h *Handler) handleInspect(args []string) string {
+	if len(args) != 0 && len(args) != 4 {
+		return formatError(handlerError{Code: "invalid_args", Message: fmt.Sprintf("expected 0 args (whole canvas) or 4 args (x y w h), got %d", len(args))})
+	}
+	c := h.history.Canvas()
+	x, y, w, hgt := 0, 0, c.Width(), c.Height()
+	if len(args) == 4 {
+		var err error
+		if x, err = parseIntArg(args[0], "x"); err != nil {
+			return formatError(err)
+		}
+		if y, err = parseIntArg(args[1], "y"); err != nil {
+			return formatError(err)
+		}
+		if w, err = parseIntArg(args[2], "w"); err != nil {
+			return formatError(err)
+		}
+		if hgt, err = parseIntArg(args[3], "h"); err != nil {
+			return formatError(err)
+		}
+	}
+	pixels, err := c.CopyRegion(x, y, w, hgt)
+	if err != nil {
+		return formatError(err)
+	}
+	rows := make([]string, hgt)
+	for row := 0; row < hgt; row++ {
+		cells := make([]string, w)
+		for col := 0; col < w; col++ {
+			cells[col] = pxcolor.Format(pixels[row*w+col])
+		}
+		rows[row] = strings.Join(cells, ",")
+	}
+	return protocol.FormatOK(strings.Join(rows, ";"))
 }
 
 func (h *Handler) handleStop(args []string) string {
