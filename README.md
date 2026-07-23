@@ -147,6 +147,20 @@ pxcli frame ghost 0 0.5              # frame 1 on top, frame 0 dimmed underneath
 pxcli export_sheet sheet.png --cols 4
 ```
 
+Reference underlay:
+
+- `pxcli import_reference <path> [--opacity N]` — import a local PNG/JPEG (resized to the canvas dimensions) as a non-drawable reference underneath the canvas, dimmed to opacity `N` (default `0.35`), to trace proportions/silhouette against. Only reads local files — no fetching of external/copyrighted assets. Replaces any previously imported reference.
+- `pxcli export_debug <filename.png>` — export the active frame's flattened visible layers with the imported reference composited beneath them. Unlike `export`, which never includes the underlay.
+
+The underlay is global (not per-layer or per-frame): it isn't a layer, so `set_pixel`/`fill_rect`/`line`/etc. can never write to it, and it stays out of `export`/`export_sheet` entirely. It **is** visible in the windowed renderer (composited beneath frame `0`'s canvas live) and in `export_debug`.
+
+```bash
+pxcli import_reference ref.png --opacity 0.4
+pxcli set_pixel 4 4 "#ff0000"       # drawn pixels always win over the underlay
+pxcli export_debug check.png        # shows drawing + dimmed reference together
+pxcli export out.png                # shows only the drawing, no reference
+```
+
 Common error codes:
 
 - `invalid_command` unknown command

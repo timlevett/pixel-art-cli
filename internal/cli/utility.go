@@ -82,3 +82,50 @@ func NewExportSheetCmd() *cobra.Command {
 
 	return cmd
 }
+
+// NewImportReferenceCmd creates the import_reference command.
+func NewImportReferenceCmd() *cobra.Command {
+	var opacity float64
+
+	cmd := &cobra.Command{
+		Use:   "import_reference <path>",
+		Short: "Import a local PNG/JPEG as a non-drawable reference underlay, dimmed to --opacity (default 0.35), for tracing proportions/silhouette",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return invalidArgCount(1, len(args))
+			}
+			request := fmt.Sprintf("import_reference %s", args[0])
+			if cmd.Flags().Changed("opacity") {
+				request = fmt.Sprintf("import_reference %s %g", args[0], opacity)
+			}
+			return sendCommandRequest(cmd, request)
+		},
+	}
+	cmd.Flags().Float64Var(&opacity, "opacity", 0.35, "Underlay opacity (0-1)")
+	// Deliberately interspersed, same reasoning as export_sheet: the only
+	// positional is a local file path.
+
+	return cmd
+}
+
+// NewExportDebugCmd creates the export_debug command.
+func NewExportDebugCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "export_debug <filename.png>",
+		Short: "Export the canvas with the imported reference underlay composited beneath it (unlike export, which never includes the underlay)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return invalidArgCount(1, len(args))
+			}
+			absPath, err := filepath.Abs(args[0])
+			if err != nil {
+				return invalidArgsf("invalid path: %v", err)
+			}
+			request := fmt.Sprintf("export_debug %s", absPath)
+			return sendCommandRequest(cmd, request)
+		},
+	}
+	cmd.Flags().SetInterspersed(false)
+
+	return cmd
+}

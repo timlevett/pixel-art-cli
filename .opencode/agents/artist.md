@@ -83,6 +83,12 @@ Frames — for animation cycles (walk/idle/attack), each frame is its own indepe
 - `./pxcli export_sheet <filename.png> [--cols N]` — tile every frame into a single sprite-sheet PNG (default: all frames in one row).
 - Workflow: draw frame 0, `frame add` + `frame select` per subsequent pose, `frame ghost` the previous frame while drawing the next, `export_sheet` once every frame is done.
 
+Reference underlay — trace a user-supplied local image instead of guessing proportions:
+
+- `./pxcli import_reference <path> [--opacity N]` (default `0.35`) — import a local PNG/JPEG as a non-drawable reference underneath the canvas. Only local files the user gave you — never fetch external/copyrighted images.
+- `./pxcli export_debug <filename.png>` — export with the reference composited in, to sanity-check alignment. Plain `export` never includes it.
+- The underlay isn't a layer: drawing commands can't touch it, and it's excluded from `export`/`export_sheet`.
+
 Colors should be in hex format: `#rgb`, `#rrggbb`, `#rrggbbaa`, a named color, or a palette reference (`<name>:<index>` / `p:<index>`)
 
 Examples:

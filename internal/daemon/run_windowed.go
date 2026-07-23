@@ -31,15 +31,23 @@ func runWindowed(cfg config.Config, opts WindowedOptions, factory rendererFactor
 	manager := history.New(grid)
 	stopper := NewStopper()
 
-	renderer, err := factory(grid, cfg.Scale)
+	// renderer is assigned below, after handler exists (the handler owns the
+	// underlay store the render source needs); declared first so the onStop
+	// closure can capture it. onStop can only fire via a "stop" command over
+	// the socket, which can't arrive before the server starts further down,
+	// so renderer is always non-nil by the time it's actually called.
+	var renderer Renderer
+	handler := NewHandler(manager, func() {
+		stopper.Stop()
+		if renderer != nil {
+			renderer.RequestClose()
+		}
+	})
+
+	renderer, err = factory(newUnderlayRenderSource(grid, handler.Underlay()), cfg.Scale)
 	if err != nil {
 		return err
 	}
-
-	handler := NewHandler(manager, func() {
-		stopper.Stop()
-		renderer.RequestClose()
-	})
 
 	server, err := NewServer(socketPath, handler)
 	if err != nil {
