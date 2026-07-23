@@ -10,6 +10,7 @@ import (
 	"pxcli/internal/canvas"
 	pxcolor "pxcli/internal/color"
 	"pxcli/internal/history"
+	"pxcli/internal/palette"
 	"pxcli/internal/protocol"
 )
 
@@ -20,12 +21,13 @@ var errScriptFailed = errors.New("script failed")
 // Handler maps protocol requests to canvas operations.
 type Handler struct {
 	history *history.Manager
+	palette *palette.Store
 	onStop  func()
 }
 
 // NewHandler creates a command handler for the provided history manager.
 func NewHandler(history *history.Manager, onStop func()) *Handler {
-	return &Handler{history: history, onStop: onStop}
+	return &Handler{history: history, palette: palette.New(), onStop: onStop}
 }
 
 // Handle executes a command and returns a single-line protocol response.
@@ -47,6 +49,12 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handleUndo(request.Args)
 	case "redo":
 		return h.handleRedo(request.Args)
+	case "palette_add":
+		return h.handlePaletteAdd(request.Args)
+	case "palette_list":
+		return h.handlePaletteList(request.Args)
+	case "palette_use":
+		return h.handlePaletteUse(request.Args)
 	case "stop":
 		return h.handleStop(request.Args)
 	default:
@@ -56,14 +64,14 @@ func (h *Handler) Handle(request protocol.Request) string {
 
 func (h *Handler) handleSetPixel(args []string) string {
 	if err := h.history.Apply(func(c *canvas.Canvas) error {
-		return applySetPixel(c, args)
+		return applySetPixel(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
 }
 
-func applySetPixel(c *canvas.Canvas, args []string) error {
+func applySetPixel(c *canvas.Canvas, store *palette.Store, args []string) error {
 	if len(args) != 3 {
 		return invalidArgCountErr(3, len(args))
 	}
@@ -75,7 +83,7 @@ func applySetPixel(c *canvas.Canvas, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := pxcolor.Parse(args[2])
+	value, err := resolveColor(store, args[2])
 	if err != nil {
 		return err
 	}
@@ -103,14 +111,14 @@ func (h *Handler) handleGetPixel(args []string) string {
 
 func (h *Handler) handleFillRect(args []string) string {
 	if err := h.history.Apply(func(c *canvas.Canvas) error {
-		return applyFillRect(c, args)
+		return applyFillRect(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
 }
 
-func applyFillRect(c *canvas.Canvas, args []string) error {
+func applyFillRect(c *canvas.Canvas, store *palette.Store, args []string) error {
 	if len(args) != 5 {
 		return invalidArgCountErr(5, len(args))
 	}
@@ -130,7 +138,7 @@ func applyFillRect(c *canvas.Canvas, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := pxcolor.Parse(args[4])
+	value, err := resolveColor(store, args[4])
 	if err != nil {
 		return err
 	}
@@ -139,14 +147,14 @@ func applyFillRect(c *canvas.Canvas, args []string) error {
 
 func (h *Handler) handleLine(args []string) string {
 	if err := h.history.Apply(func(c *canvas.Canvas) error {
-		return applyLine(c, args)
+		return applyLine(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
 }
 
-func applyLine(c *canvas.Canvas, args []string) error {
+func applyLine(c *canvas.Canvas, store *palette.Store, args []string) error {
 	if len(args) != 5 {
 		return invalidArgCountErr(5, len(args))
 	}
@@ -166,7 +174,7 @@ func applyLine(c *canvas.Canvas, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := pxcolor.Parse(args[4])
+	value, err := resolveColor(store, args[4])
 	if err != nil {
 		return err
 	}
@@ -175,20 +183,20 @@ func applyLine(c *canvas.Canvas, args []string) error {
 
 func (h *Handler) handleClear(args []string) string {
 	if err := h.history.Apply(func(c *canvas.Canvas) error {
-		return applyClear(c, args)
+		return applyClear(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
 }
 
-func applyClear(c *canvas.Canvas, args []string) error {
+func applyClear(c *canvas.Canvas, store *palette.Store, args []string) error {
 	if len(args) > 1 {
 		return invalidArgCountErr(1, len(args))
 	}
 	value := canvasTransparent()
 	if len(args) == 1 {
-		parsed, err := pxcolor.Parse(args[0])
+		parsed, err := resolveColor(store, args[0])
 		if err != nil {
 			return err
 		}
@@ -265,7 +273,7 @@ func (h *Handler) HandleScript(lines []string) string {
 	err := h.history.Apply(func(c *canvas.Canvas) error {
 		pre := c.Snapshot()
 		for _, cmd := range commands {
-			if err := applyScriptCommand(c, cmd.request); err != nil {
+			if err := applyScriptCommand(c, h.palette, cmd.request); err != nil {
 				code, message := errorCodeAndMessage(err)
 				failed = &failure{line: cmd.line, code: code, message: message}
 				_ = c.Restore(pre)
@@ -283,19 +291,85 @@ func (h *Handler) HandleScript(lines []string) string {
 	return protocol.FormatOK("")
 }
 
-func applyScriptCommand(c *canvas.Canvas, request protocol.Request) error {
+func applyScriptCommand(c *canvas.Canvas, store *palette.Store, request protocol.Request) error {
 	switch request.Command {
 	case "set_pixel":
-		return applySetPixel(c, request.Args)
+		return applySetPixel(c, store, request.Args)
 	case "fill_rect":
-		return applyFillRect(c, request.Args)
+		return applyFillRect(c, store, request.Args)
 	case "line":
-		return applyLine(c, request.Args)
+		return applyLine(c, store, request.Args)
 	case "clear":
-		return applyClear(c, request.Args)
+		return applyClear(c, store, request.Args)
 	default:
 		return handlerError{Code: "invalid_command", Message: fmt.Sprintf("unsupported command %q in script", request.Command)}
 	}
+}
+
+// resolveColor resolves a color argument that is either a palette reference
+// ("<name>:<index>", or "p:<index>" for the active palette) or a raw color
+// accepted by pxcolor.Parse (hex/named). Palette lookup failures are
+// reported with the invalid_color code so callers see a consistent error
+// shape regardless of which form they used.
+func resolveColor(store *palette.Store, arg string) (color.RGBA, error) {
+	if value, matched, err := store.ResolveRef(arg); matched {
+		if err != nil {
+			var perr palette.Error
+			if errors.As(err, &perr) {
+				return color.RGBA{}, pxcolor.Error{Code: "invalid_color", Message: perr.Message}
+			}
+			return color.RGBA{}, err
+		}
+		return value, nil
+	}
+	return pxcolor.Parse(arg)
+}
+
+func (h *Handler) handlePaletteAdd(args []string) string {
+	if len(args) < 2 {
+		return formatError(handlerError{Code: "invalid_args", Message: fmt.Sprintf("expected a name and at least one color, got %d args", len(args))})
+	}
+	name := args[0]
+	colors := make([]color.RGBA, 0, len(args)-1)
+	for _, hex := range args[1:] {
+		value, err := pxcolor.Parse(hex)
+		if err != nil {
+			return formatError(err)
+		}
+		colors = append(colors, value)
+	}
+	if err := h.palette.Add(name, colors); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+func (h *Handler) handlePaletteList(args []string) string {
+	if len(args) > 1 {
+		return invalidArgCount(1, len(args))
+	}
+	if len(args) == 0 {
+		return protocol.FormatOK(strings.Join(h.palette.List(), ","))
+	}
+	colors, err := h.palette.Colors(args[0])
+	if err != nil {
+		return formatError(err)
+	}
+	formatted := make([]string, len(colors))
+	for i, value := range colors {
+		formatted[i] = pxcolor.Format(value)
+	}
+	return protocol.FormatOK(strings.Join(formatted, ","))
+}
+
+func (h *Handler) handlePaletteUse(args []string) string {
+	if len(args) != 1 {
+		return invalidArgCount(1, len(args))
+	}
+	if err := h.palette.Use(args[0]); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
 }
 
 func (h *Handler) handleStop(args []string) string {
@@ -360,6 +434,10 @@ func errorCodeAndMessage(err error) (string, string) {
 	var colErr pxcolor.Error
 	if errors.As(err, &colErr) {
 		return colErr.Code, colErr.Message
+	}
+	var palErr palette.Error
+	if errors.As(err, &palErr) {
+		return palErr.Code, palErr.Message
 	}
 	var histErr history.Error
 	if errors.As(err, &histErr) {
