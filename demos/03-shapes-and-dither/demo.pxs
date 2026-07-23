@@ -1,0 +1,8 @@
+# Shapes + shading: circle/ellipse fills plus dither_fill to fake a
+# gradient (pixel art has no true per-pixel gradient fill).
+clear
+circle 8 8 7 #2a6f2a fill
+dither_fill 2 2 8 8 #7fd67f #2a6f2a checkerboard
+dither_fill 8 2 6 6 #cfffcf #7fd67f horizontal
+ellipse 6 6 2 1 #eaffea fill
+circle 8 8 7 #143d14

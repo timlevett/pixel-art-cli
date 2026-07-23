@@ -1,0 +1,8 @@
+#1a2f66ff #6a5d5bff #1a2f66ff #ffb347ff #1a2f66ff #6a5d5bff #1a2f66ff #1a2f66ff
+#6a5d5bff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #6a5d5bff #1a2f66ff
+#1a2f66ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #1a2f66ff #1a2f66ff
+#ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #1a2f66ff
+#af8552ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #af8552ff #1a2f66ff
+#1a2f66ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #ffb347ff #1a2f66ff #1a2f66ff
+#1a2f66ff #af8552ff #1a2f66ff #ffb347ff #1a2f66ff #af8552ff #1a2f66ff #1a2f66ff
+#1a2f66ff #1a2f66ff #1a2f66ff #1a2f66ff #1a2f66ff #1a2f66ff #1a2f66ff #1a2f66ff
