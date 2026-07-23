@@ -112,6 +112,23 @@ pxcli blend "#000000" "#ffffff" 0.5   # -> ok #808080ff
 pxcli inspect 0 0 4 4
 ```
 
+Layers:
+
+- `pxcli layer add <name>` — create a new blank, visible layer, same size as the canvas. `base` (the original canvas) always exists and can't be re-added.
+- `pxcli layer list` — list layer names in creation order (`base` first).
+- `pxcli layer select <name>` — set the active layer. Every drawing command, `get_pixel`, `inspect`, `undo`, and `redo` act on whichever layer is active; each layer has its own independent undo/redo history.
+- `pxcli layer visible <name> <true|false>` — include or exclude a layer when `export` flattens all visible layers (`base` first, in creation order, standard alpha "over" compositing) into the output PNG.
+
+Layers are non-destructive: `export` flattens into the output file only — it never merges layers into each other, so `base` and every other layer stay independently editable. **The windowed renderer only ever displays the `base` layer** — other layers are headless-only until you `export` (or select back to `base`) to see them composited.
+
+```bash
+pxcli layer add sprite
+pxcli layer select sprite
+pxcli fill_rect 4 4 8 8 "#ff0000"   # drawn on "sprite", not "base"
+pxcli layer select base
+pxcli export out.png                # out.png shows base + sprite composited
+```
+
 Common error codes:
 
 - `invalid_command` unknown command
@@ -119,6 +136,7 @@ Common error codes:
 - `invalid_color` unsupported color format (including a palette reference that fails to resolve)
 - `invalid_palette` palette management error (e.g. `palette use`/`palette list` on an undefined palette)
 - `invalid_clipboard` `paste` referenced a clipboard slot that has not been `copy`'d into yet
+- `invalid_layer` referenced a layer name that doesn't exist (`layer select`/`layer visible`)
 - `out_of_bounds` coordinate outside canvas
 - `no_history` undo/redo with empty history
 - `io` export file error
