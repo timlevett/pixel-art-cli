@@ -11,6 +11,7 @@ import (
 	"pxcli/internal/clipboard"
 	pxcolor "pxcli/internal/color"
 	"pxcli/internal/history"
+	"pxcli/internal/layer"
 	"pxcli/internal/palette"
 	"pxcli/internal/protocol"
 )
@@ -19,17 +20,33 @@ import (
 // error details are carried out-of-band via the enclosing closure.
 var errScriptFailed = errors.New("script failed")
 
-// Handler maps protocol requests to canvas operations.
+// Handler maps protocol requests to canvas operations. Drawing/undo/export
+// commands act on the active layer (see internal/layer); the windowed
+// renderer is wired directly to the original canvas passed into NewHandler
+// (i.e. the "base" layer) and does not reflect other layers until export
+// flattens them.
 type Handler struct {
-	history   *history.Manager
+	layers    *layer.Store
 	palette   *palette.Store
 	clipboard *clipboard.Store
 	onStop    func()
 }
 
-// NewHandler creates a command handler for the provided history manager.
+// NewHandler creates a command handler whose "base" layer wraps the
+// provided history manager, so behavior is unchanged from before layers
+// existed until a layer is added and selected.
 func NewHandler(history *history.Manager, onStop func()) *Handler {
-	return &Handler{history: history, palette: palette.New(), clipboard: clipboard.New(), onStop: onStop}
+	return &Handler{
+		layers:    layer.New(history.Canvas(), history),
+		palette:   palette.New(),
+		clipboard: clipboard.New(),
+		onStop:    onStop,
+	}
+}
+
+// active returns the currently selected layer's canvas + history pair.
+func (h *Handler) active() *layer.Entry {
+	return h.layers.Active()
 }
 
 // Handle executes a command and returns a single-line protocol response.
@@ -75,6 +92,14 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handleBlend(request.Args)
 	case "inspect":
 		return h.handleInspect(request.Args)
+	case "layer_add":
+		return h.handleLayerAdd(request.Args)
+	case "layer_list":
+		return h.handleLayerList(request.Args)
+	case "layer_select":
+		return h.handleLayerSelect(request.Args)
+	case "layer_visible":
+		return h.handleLayerVisible(request.Args)
 	case "stop":
 		return h.handleStop(request.Args)
 	default:
@@ -83,7 +108,7 @@ func (h *Handler) Handle(request protocol.Request) string {
 }
 
 func (h *Handler) handleSetPixel(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applySetPixel(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -122,7 +147,7 @@ func (h *Handler) handleGetPixel(args []string) string {
 	if err != nil {
 		return formatError(err)
 	}
-	value, err := h.history.Canvas().GetPixel(x, y)
+	value, err := h.active().Canvas.GetPixel(x, y)
 	if err != nil {
 		return formatError(err)
 	}
@@ -130,7 +155,7 @@ func (h *Handler) handleGetPixel(args []string) string {
 }
 
 func (h *Handler) handleFillRect(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyFillRect(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -166,7 +191,7 @@ func applyFillRect(c *canvas.Canvas, store *palette.Store, args []string) error 
 }
 
 func (h *Handler) handleLine(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyLine(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -202,7 +227,7 @@ func applyLine(c *canvas.Canvas, store *palette.Store, args []string) error {
 }
 
 func (h *Handler) handleClear(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyClear(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -227,7 +252,7 @@ func applyClear(c *canvas.Canvas, store *palette.Store, args []string) error {
 }
 
 func (h *Handler) handleCircle(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyCircle(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -267,7 +292,7 @@ func applyCircle(c *canvas.Canvas, store *palette.Store, args []string) error {
 }
 
 func (h *Handler) handleEllipse(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyEllipse(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -311,7 +336,7 @@ func applyEllipse(c *canvas.Canvas, store *palette.Store, args []string) error {
 }
 
 func (h *Handler) handleDitherFill(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyDitherFill(c, h.palette, args)
 	}); err != nil {
 		return formatError(err)
@@ -387,7 +412,7 @@ func (h *Handler) handleCopy(args []string) string {
 	if err != nil {
 		return formatError(err)
 	}
-	pixels, err := h.history.Canvas().CopyRegion(x, y, w, hgt)
+	pixels, err := h.active().Canvas.CopyRegion(x, y, w, hgt)
 	if err != nil {
 		return formatError(err)
 	}
@@ -398,7 +423,7 @@ func (h *Handler) handleCopy(args []string) string {
 }
 
 func (h *Handler) handlePaste(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyPaste(c, h.clipboard, args)
 	}); err != nil {
 		return formatError(err)
@@ -434,7 +459,7 @@ func applyPaste(c *canvas.Canvas, store *clipboard.Store, args []string) error {
 }
 
 func (h *Handler) handleMove(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyMove(c, args)
 	}); err != nil {
 		return formatError(err)
@@ -476,7 +501,7 @@ func applyMove(c *canvas.Canvas, args []string) error {
 }
 
 func (h *Handler) handleMirror(args []string) string {
-	if err := h.history.Apply(func(c *canvas.Canvas) error {
+	if err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		return applyMirror(c, args)
 	}); err != nil {
 		return formatError(err)
@@ -509,11 +534,14 @@ func applyMirror(c *canvas.Canvas, args []string) error {
 	return c.MirrorRegion(x, y, w, hgt, args[4])
 }
 
+// handleExport writes the flattened composite of every visible layer (see
+// internal/layer), not just the active layer, so layered work is only ever
+// destructively merged in the exported file, never in the editable canvases.
 func (h *Handler) handleExport(args []string) string {
 	if len(args) != 1 {
 		return invalidArgCount(1, len(args))
 	}
-	if err := h.history.Canvas().ExportPNG(args[0]); err != nil {
+	if err := h.layers.Flatten().ExportPNG(args[0]); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -523,7 +551,7 @@ func (h *Handler) handleUndo(args []string) string {
 	if len(args) != 0 {
 		return invalidArgCount(0, len(args))
 	}
-	if err := h.history.Undo(); err != nil {
+	if err := h.active().History.Undo(); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -533,7 +561,7 @@ func (h *Handler) handleRedo(args []string) string {
 	if len(args) != 0 {
 		return invalidArgCount(0, len(args))
 	}
-	if err := h.history.Redo(); err != nil {
+	if err := h.active().History.Redo(); err != nil {
 		return formatError(err)
 	}
 	return protocol.FormatOK("")
@@ -576,7 +604,7 @@ func (h *Handler) HandleScript(lines []string) string {
 		message string
 	}
 	var failed *failure
-	err := h.history.Apply(func(c *canvas.Canvas) error {
+	err := h.active().History.Apply(func(c *canvas.Canvas) error {
 		pre := c.Snapshot()
 		for _, cmd := range commands {
 			if err := applyScriptCommand(c, h.palette, h.clipboard, cmd.request); err != nil {
@@ -725,7 +753,7 @@ func (h *Handler) handleInspect(args []string) string {
 	if len(args) != 0 && len(args) != 4 {
 		return formatError(handlerError{Code: "invalid_args", Message: fmt.Sprintf("expected 0 args (whole canvas) or 4 args (x y w h), got %d", len(args))})
 	}
-	c := h.history.Canvas()
+	c := h.active().Canvas
 	x, y, w, hgt := 0, 0, c.Width(), c.Height()
 	if len(args) == 4 {
 		var err error
@@ -755,6 +783,55 @@ func (h *Handler) handleInspect(args []string) string {
 		rows[row] = strings.Join(cells, ",")
 	}
 	return protocol.FormatOK(strings.Join(rows, ";"))
+}
+
+// handleLayerAdd creates a new blank, visible layer sized to match the
+// canvas. The reserved name "base" (the original canvas) always exists and
+// cannot be re-added.
+func (h *Handler) handleLayerAdd(args []string) string {
+	if len(args) != 1 {
+		return invalidArgCount(1, len(args))
+	}
+	if err := h.layers.Add(args[0]); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// handleLayerList lists layer names in creation order ("base" first).
+func (h *Handler) handleLayerList(args []string) string {
+	if len(args) != 0 {
+		return invalidArgCount(0, len(args))
+	}
+	return protocol.FormatOK(strings.Join(h.layers.List(), ","))
+}
+
+// handleLayerSelect sets the active layer: drawing commands, get_pixel,
+// inspect, undo, and redo all act on whichever layer is currently active.
+func (h *Handler) handleLayerSelect(args []string) string {
+	if len(args) != 1 {
+		return invalidArgCount(1, len(args))
+	}
+	if err := h.layers.Select(args[0]); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// handleLayerVisible marks whether a layer is included when export
+// flattens all layers into the output PNG.
+func (h *Handler) handleLayerVisible(args []string) string {
+	if len(args) != 2 {
+		return invalidArgCount(2, len(args))
+	}
+	visible, err := strconv.ParseBool(args[1])
+	if err != nil {
+		return formatError(handlerError{Code: "invalid_args", Message: "visibility must be true or false"})
+	}
+	if err := h.layers.SetVisible(args[0], visible); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
 }
 
 func (h *Handler) handleStop(args []string) string {
@@ -827,6 +904,10 @@ func errorCodeAndMessage(err error) (string, string) {
 	var clipErr clipboard.Error
 	if errors.As(err, &clipErr) {
 		return clipErr.Code, clipErr.Message
+	}
+	var layerErr layer.Error
+	if errors.As(err, &layerErr) {
+		return layerErr.Code, layerErr.Message
 	}
 	var histErr history.Error
 	if errors.As(err, &histErr) {
