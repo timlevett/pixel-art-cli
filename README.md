@@ -68,6 +68,26 @@ Batch execution:
 pxcli script art.pxs
 ```
 
+Palettes:
+
+- `pxcli palette add <name> <color...>` — define (or replace) a named palette from an ordered list of colors (any accepted color format).
+- `pxcli palette list [name]` — list palette names, or the colors in a named palette (in slot order).
+- `pxcli palette use <name>` — select the active palette for the `p:<index>` shorthand.
+
+Any `<color>` argument on `set_pixel`, `fill_rect`, `line`, `clear`, and inside `script` files also accepts a palette reference instead of a raw color:
+
+- `<name>:<index>` — slot `<index>` of the named palette.
+- `p:<index>` — slot `<index>` of the palette most recently selected with `palette use`.
+
+```bash
+pxcli palette add fire "#ff0000" "#ffa500" "#ffff00"
+pxcli set_pixel 1 1 fire:0       # named reference, no "use" needed
+pxcli palette use fire
+pxcli fill_rect 2 2 3 3 p:2      # active-palette shorthand
+```
+
+Referencing an undefined palette or an out-of-range slot returns `err invalid_color <message>`, same as any other malformed color argument.
+
 Utility:
 
 - `pxcli get_pixel <x> <y>`
@@ -79,7 +99,8 @@ Common error codes:
 
 - `invalid_command` unknown command
 - `invalid_args` wrong argument count or type
-- `invalid_color` unsupported color format
+- `invalid_color` unsupported color format (including a palette reference that fails to resolve)
+- `invalid_palette` palette management error (e.g. `palette use`/`palette list` on an undefined palette)
 - `out_of_bounds` coordinate outside canvas
 - `no_history` undo/redo with empty history
 - `io` export file error
@@ -90,6 +111,7 @@ Accepted input formats:
 
 - Hex: `#rgb`, `#rrggbb`, `#rrggbbaa`
 - Named: `black`, `white`, `red`, `green`, `blue`, `yellow`, `orange`, `purple`, `cyan`, `magenta`, `gray`, `grey`, `transparent`
+- Palette reference: `<name>:<index>` or `p:<index>` (active palette) — see [Palettes](#cli-api)
 
 !!! For zsh shells you have to put colors between "" parenthesis. !!!
 
