@@ -43,6 +43,12 @@ func (h *Handler) Handle(request protocol.Request) string {
 		return h.handleLine(request.Args)
 	case "clear":
 		return h.handleClear(request.Args)
+	case "circle":
+		return h.handleCircle(request.Args)
+	case "ellipse":
+		return h.handleEllipse(request.Args)
+	case "dither_fill":
+		return h.handleDitherFill(request.Args)
 	case "export":
 		return h.handleExport(request.Args)
 	case "undo":
@@ -206,6 +212,138 @@ func applyClear(c *canvas.Canvas, store *palette.Store, args []string) error {
 	return nil
 }
 
+func (h *Handler) handleCircle(args []string) string {
+	if err := h.history.Apply(func(c *canvas.Canvas) error {
+		return applyCircle(c, h.palette, args)
+	}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// applyCircle draws a circle. args is <cx> <cy> <r> <color> with an
+// optional trailing "fill" literal to draw a solid disk instead of an
+// outline.
+func applyCircle(c *canvas.Canvas, store *palette.Store, args []string) error {
+	filled := false
+	if len(args) == 5 && args[4] == "fill" {
+		filled = true
+		args = args[:4]
+	}
+	if len(args) != 4 {
+		return invalidArgCountErr(4, len(args))
+	}
+	cx, err := parseIntArg(args[0], "cx")
+	if err != nil {
+		return err
+	}
+	cy, err := parseIntArg(args[1], "cy")
+	if err != nil {
+		return err
+	}
+	r, err := parseIntArg(args[2], "r")
+	if err != nil {
+		return err
+	}
+	value, err := resolveColor(store, args[3])
+	if err != nil {
+		return err
+	}
+	return c.Circle(cx, cy, r, value, filled)
+}
+
+func (h *Handler) handleEllipse(args []string) string {
+	if err := h.history.Apply(func(c *canvas.Canvas) error {
+		return applyEllipse(c, h.palette, args)
+	}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// applyEllipse draws an ellipse. args is <cx> <cy> <rx> <ry> <color> with an
+// optional trailing "fill" literal to draw a solid region instead of an
+// outline.
+func applyEllipse(c *canvas.Canvas, store *palette.Store, args []string) error {
+	filled := false
+	if len(args) == 6 && args[5] == "fill" {
+		filled = true
+		args = args[:5]
+	}
+	if len(args) != 5 {
+		return invalidArgCountErr(5, len(args))
+	}
+	cx, err := parseIntArg(args[0], "cx")
+	if err != nil {
+		return err
+	}
+	cy, err := parseIntArg(args[1], "cy")
+	if err != nil {
+		return err
+	}
+	rx, err := parseIntArg(args[2], "rx")
+	if err != nil {
+		return err
+	}
+	ry, err := parseIntArg(args[3], "ry")
+	if err != nil {
+		return err
+	}
+	value, err := resolveColor(store, args[4])
+	if err != nil {
+		return err
+	}
+	return c.Ellipse(cx, cy, rx, ry, value, filled)
+}
+
+func (h *Handler) handleDitherFill(args []string) string {
+	if err := h.history.Apply(func(c *canvas.Canvas) error {
+		return applyDitherFill(c, h.palette, args)
+	}); err != nil {
+		return formatError(err)
+	}
+	return protocol.FormatOK("")
+}
+
+// applyDitherFill fills a rectangle with an alternating two-color pattern.
+// args is <x> <y> <w> <h> <color1> <color2> with an optional trailing
+// pattern name ("checkerboard" (default), "horizontal", "vertical").
+func applyDitherFill(c *canvas.Canvas, store *palette.Store, args []string) error {
+	pattern := ""
+	if len(args) == 7 {
+		pattern = args[6]
+		args = args[:6]
+	}
+	if len(args) != 6 {
+		return invalidArgCountErr(6, len(args))
+	}
+	x, err := parseIntArg(args[0], "x")
+	if err != nil {
+		return err
+	}
+	y, err := parseIntArg(args[1], "y")
+	if err != nil {
+		return err
+	}
+	w, err := parseIntArg(args[2], "w")
+	if err != nil {
+		return err
+	}
+	hgt, err := parseIntArg(args[3], "h")
+	if err != nil {
+		return err
+	}
+	color1, err := resolveColor(store, args[4])
+	if err != nil {
+		return err
+	}
+	color2, err := resolveColor(store, args[5])
+	if err != nil {
+		return err
+	}
+	return c.DitherFill(x, y, w, hgt, color1, color2, pattern)
+}
+
 func (h *Handler) handleExport(args []string) string {
 	if len(args) != 1 {
 		return invalidArgCount(1, len(args))
@@ -238,7 +376,8 @@ func (h *Handler) handleRedo(args []string) string {
 
 // HandleScript executes a batch of newline-separated commands as a single
 // undoable step. Blank lines and lines starting with '#' are ignored; only
-// canvas-mutating commands (set_pixel, fill_rect, line, clear) are allowed.
+// canvas-mutating commands (set_pixel, fill_rect, line, clear, circle,
+// ellipse, dither_fill) are allowed.
 // Execution stops at the first error, the canvas is rolled back to its
 // pre-script state, and the response reports the 1-based line number that
 // failed. On success the whole batch is recorded as one undo entry.
@@ -301,6 +440,12 @@ func applyScriptCommand(c *canvas.Canvas, store *palette.Store, request protocol
 		return applyLine(c, store, request.Args)
 	case "clear":
 		return applyClear(c, store, request.Args)
+	case "circle":
+		return applyCircle(c, store, request.Args)
+	case "ellipse":
+		return applyEllipse(c, store, request.Args)
+	case "dither_fill":
+		return applyDitherFill(c, store, request.Args)
 	default:
 		return handlerError{Code: "invalid_command", Message: fmt.Sprintf("unsupported command %q in script", request.Command)}
 	}
