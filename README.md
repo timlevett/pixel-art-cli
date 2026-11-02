@@ -51,6 +51,8 @@ Lifecycle:
 - `pxcli start [--size 32x32] [--scale 10] [--headless] [--socket <path>]`
 - `pxcli stop [--socket <path>]`
 
+On `pxcli start`, if the PID file points at a process that's no longer running, the daemon treats the PID file and `--socket` file as a stale pid/socket pair left behind by an unclean shutdown (e.g. a killed process): it removes both and starts fresh. If the socket file exists but a live process is still listening on it, startup instead fails with `daemon_already_running`.
+
 Drawing:
 
 - `pxcli set_pixel <x> <y> <color>`
@@ -103,7 +105,7 @@ Referencing an undefined palette or an out-of-range slot returns `err invalid_co
 Utility:
 
 - `pxcli get_pixel <x> <y>`
-- `pxcli export <filename.png>`
+- `pxcli export <filename.png>` — the client resolves `<filename.png>` to an absolute path before sending it to the daemon, so it's written relative to the directory you ran `pxcli` from, not the daemon's working directory.
 - `pxcli undo`
 - `pxcli redo`
 - `pxcli blend <color1> <color2> <ratio>` — compute a linearly interpolated color (`ratio` 0 = `color1`, 1 = `color2`) for anti-aliasing edge colors by hand. Read-only; both colors accept palette references.
